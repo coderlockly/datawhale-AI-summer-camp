@@ -1,0 +1,116 @@
+### 一、Transformer介绍
+
+Transformer是由Vaswani等人在2017年提出的一种神经网络架构，主要用于自然语言处理任务，尤其是机器翻译。与传统的序列到序列模型（如RNN、LSTM）不同，Transformer完全基于注意力机制，可以并行处理序列中的所有位置。Transformer由编码器和解码器两部分组成，每部分由多个相同的层堆叠而成。
+
+### 二、嵌入表示层介绍
+
+嵌入表示层的主要作用是将输入的词汇转换为向量表示。这一层通常包括词嵌入（Word Embedding）和位置编码（Positional Encoding）。词嵌入通过查表操作将词汇映射到高维向量空间，而位置编码则通过添加位置信息使模型能够区分不同位置的词语，从而保留序列信息。
+
+```python
+import torch
+import torch.nn as nn
+
+class EmbeddingLayer(nn.Module):
+    def __init__(self, vocab_size, embed_size, max_len):
+        super(EmbeddingLayer, self).__init__()
+        self.word_embedding = nn.Embedding(vocab_size, embed_size)
+        self.position_embedding = nn.Embedding(max_len, embed_size)
+
+    def forward(self, x):
+        batch_size, seq_len = x.size()
+        positions = torch.arange(0, seq_len).unsqueeze(0).repeat(batch_size, 1).to(x.device)
+        word_embed = self.word_embedding(x)
+        pos_embed = self.position_embedding(positions)
+        return word_embed + pos_embed
+```
+
+### 三、注意力层
+
+注意力层是Transformer的核心部分。最常用的是多头自注意力机制（Multi-Head Self-Attention）。每个注意力头通过计算输入序列中每个词与其他所有词的相关性（即注意力得分）来捕捉不同子空间的信息。多头注意力机制能够在不同的子空间中并行捕捉输入序列的不同特征。
+
+具体来说，自注意力机制包括以下几个步骤：
+
+1. **计算注意力得分**：通过查询（Query）、键（Key）和值（Value）矩阵计算注意力得分。
+2. **加权求和**：根据注意力得分对值进行加权求和。
+3. **多头注意力**：将多个注意力头的输出拼接并线性变换。
+
+```python
+class MultiHeadAttention(nn.Module):
+    def __init__(self, embed_size, heads):
+        super(MultiHeadAttention, self).__init__()
+        self.heads = heads
+        self.head_dim = embed_size // heads
+
+        assert (self.head_dim * heads == embed_size), "Embedding size needs to be divisible by heads"
+
+        self.values = nn.Linear(embed_size, embed_size, bias=False)
+        self.keys = nn.Linear(embed_size, embed_size, bias=False)
+        self.queries = nn.Linear(embed_size, embed_size, bias=False)
+        self.fc_out = nn.Linear(embed_size, embed_size)
+
+    def forward(self, values, keys, query, mask):
+        N = query.shape[0]
+        value_len, key_len, query_len = values.shape[1], keys.shape[1], query.shape[1]
+
+        # Split the embedding into self.heads different pieces
+        values = self.values(values).view(N, value_len, self.heads, self.head_dim)
+        keys = self.keys(keys).view(N, key_len, self.heads, self.head_dim)
+        queries = self.queries(query).view(N, query_len, self.heads, self.head_dim)
+
+        # Calculate the attention scores
+        energy = torch.einsum("nqhd,nkhd->nhqk", [queries, keys])
+        
+        if mask is not None:
+            energy = energy.masked_fill(mask == 0, float("-1e20"))
+
+        attention = torch.softmax(energy / (self.head_dim ** (1/2)), dim=3)
+        
+        out = torch.einsum("nhql,nlhd->nqhd", [attention, values]).reshape(
+            N, query_len, self.heads * self.head_dim
+        )
+
+        out = self.fc_out(out)
+        return out
+```
+
+### 四、前馈层
+
+前馈层（Feed-Forward Layer）紧随注意力层之后，是每个编码器和解码器层的一部分。每个前馈层包括两个线性变换，中间夹杂一个非线性激活函数（通常是ReLU）。
+
+```python
+class FeedForward(nn.Module):
+    def __init__(self, embed_size, ff_hidden_size):
+        super(FeedForward, self).__init__()
+        self.fc1 = nn.Linear(embed_size, ff_hidden_size)
+        self.fc2 = nn.Linear(ff_hidden_size, embed_size)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+```
+
+### 五、残差连接与层归一化
+
+残差连接和层归一化（Layer Normalization）是Transformer中为了稳定训练和加速收敛而引入的两个重要机制。
+
+```python
+class TransformerBlock(nn.Module):
+    def __init__(self, embed_size, heads, ff_hidden_size, dropout):
+        super(TransformerBlock, self).__init__()
+        self.attention = MultiHeadAttention(embed_size, heads)
+        self.norm1 = nn.LayerNorm(embed_size)
+        self.norm2 = nn.LayerNorm(embed_size)
+        self.feed_forward = FeedForward(embed_size, ff_hidden_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, value, key, query, mask):
+        attention = self.attention(value, key, query, mask)
+        x = self.dropout(self.norm1(attention + query))
+        forward = self.feed_forward(x)
+        out = self.dropout(self.norm2(forward + x))
+        return out
+```
+
+这段代码示例展示了Transformer模型中嵌入表示层、注意力层、前馈层以及残差连接与层归一化的实现方式。通过这些模块的协同工作，Transformer能够高效地处理机器翻译等自然语言处理任务。
